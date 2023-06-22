@@ -2,6 +2,7 @@ import argparse
 import dns.resolver
 import socket
 import time
+from art import *
 from getpass import getpass
 from ldap3 import Server, Connection, ALL, ALL_ATTRIBUTES, SUBTREE
 from ldap3.extend.standard import PagedSearch
@@ -18,8 +19,8 @@ def get_credentials():
     parser.add_argument("username", help="Username for domain")
     parser.add_argument("password", help="Password for domain")
     args = parser.parse_args()
-
-    print("DEBUG INFO:")
+    tprint("AD2CIDRs.py \n", font="random")
+    print("Collecting and resolving AD computers using the following inputs:")
     print(f"Domain Controller: {args.domain_controller}")
     print(f"Domain: {args.domain}")
     print(f"Username: {args.username}")
