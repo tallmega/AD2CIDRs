@@ -82,7 +82,7 @@ def resolve_ips(computer_names, domain_controller):
             except dns.resolver.NoAnswer:
                 #print(f"No answer to the question: {name}")
                 pass
-            except dns.resolver.NoNameServers:
+            except dns.resolver.NoNameservers:
                 print(f"All nameservers failed to answer the query: {name}")
                 pass
             time.sleep(1)  # Add a half second delay between each request
