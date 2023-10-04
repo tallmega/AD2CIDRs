@@ -79,6 +79,9 @@ def resolve_ips(computer_names, domain_controller):
             except dns.resolver.NXDOMAIN:
                 #print(f"Could not resolve IP for {name}")
                 pass
+            except dns.resolver.NoAnswer:
+                #print(f"No answer to the question: {name}")
+                pass
             time.sleep(0.5)  # Add a half second delay between each request
         else:
             #print("Encountered an empty DNS name, skipping...")
