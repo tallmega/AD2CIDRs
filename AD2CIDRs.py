@@ -2,9 +2,10 @@ import argparse
 import dns.resolver
 import socket
 import time
+import ssl
 from art import *
 from getpass import getpass
-from ldap3 import Server, Connection, ALL, ALL_ATTRIBUTES, SUBTREE
+from ldap3 import Server, Connection, ALL, ALL_ATTRIBUTES, SUBTREE, Tls
 from ldap3.extend.standard import PagedSearch
 from ldap3.core.exceptions import LDAPKeyError
 from datetime import datetime
@@ -16,7 +17,7 @@ def get_credentials():
     parser = argparse.ArgumentParser()
     parser.add_argument("domain_controller", help="Domain controller address")
     parser.add_argument("domain", help="Domain name")
-    parser.add_argument("username", help="Username for domain")
+    parser.add_argument("username", help="Username for domain - username@domain.com")
     parser.add_argument("password", help="Password for domain")
     args = parser.parse_args()
     tprint("AD2CIDRs.py \n", font="random")
@@ -28,11 +29,17 @@ def get_credentials():
 
     return args.domain_controller, args.domain, args.username, args.password
 
-from ldap3 import Server, Connection, ALL, SUBTREE
-
 def get_computers(domain_controller, domain, username, password):
     base_dn = ','.join('dc=' + part for part in domain.split('.'))
-    server = Server(domain_controller, use_ssl=False)
+    
+    # Configure TLS for LDAPS (LDAP over SSL)
+    # Note: For production, use validate=ssl.CERT_REQUIRED and specify a valid CA certificate
+    tls_configuration = Tls(validate=ssl.CERT_NONE)  # For testing purposes only
+
+    # Initialize the LDAP Server with SSL
+    server = Server(domain_controller, use_ssl=True, tls=tls_configuration, get_info=ALL)
+
+    # Create the LDAP Connection
     conn = Connection(server, user=username, password=password, auto_bind=True)
 
     computer_names = []
@@ -49,11 +56,10 @@ def get_computers(domain_controller, domain, username, password):
 
         for entry in conn.entries:
             entries += 1
-            #print(f"Entry DN: {entry.entry_dn}")  # Print entry DN
             try:
-               computer_names.append(entry['dNSHostName'])
+                computer_names.append(entry['dNSHostName'])
             except LDAPKeyError:
-               print(f"No 'dNSHostName' attribute for entry {entry.entry_dn}")
+                print(f"No 'dNSHostName' attribute for entry {entry.entry_dn}")
 
         cookie = conn.result.get('controls', {}).get('1.2.840.113556.1.4.319', {}).get('value', {}).get('cookie')
 
@@ -62,6 +68,7 @@ def get_computers(domain_controller, domain, username, password):
             break
 
     print(f"Total entries returned: {entries}")
+    return computer_names
 
     return computer_names
 
