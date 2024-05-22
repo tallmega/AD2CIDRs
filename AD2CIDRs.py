@@ -5,7 +5,7 @@ import time
 import ssl
 from art import *
 from getpass import getpass
-from ldap3 import Server, Connection, ALL, ALL_ATTRIBUTES, SUBTREE, Tls
+from ldap3 import Server, Connection, ALL, NTLM, ALL_ATTRIBUTES, SUBTREE, Tls
 from ldap3.extend.standard import PagedSearch
 from ldap3.core.exceptions import LDAPKeyError
 from datetime import datetime
@@ -31,16 +31,27 @@ def get_credentials():
 
 def get_computers(domain_controller, domain, username, password):
     base_dn = ','.join('dc=' + part for part in domain.split('.'))
-    
-    # Configure TLS for LDAPS (LDAP over SSL)
-    # Note: For production, use validate=ssl.CERT_REQUIRED and specify a valid CA certificate
-    tls_configuration = Tls(validate=ssl.CERT_NONE)  # For testing purposes only
 
-    # Initialize the LDAP Server with SSL
-    server = Server(domain_controller, use_ssl=True, tls=tls_configuration, get_info=ALL)
+    # Configure TLS for LDAPS (LDAP over SSL)
+    tls_configuration = Tls(validate=ssl.CERT_NONE)  # For testing purposes only
+    # Note: For production, use validate=ssl.CERT_REQUIRED and specify a valid CA certificate
+
+    # Initialize the Server
+    server = Server(domain_controller, get_info=ALL)
+    #server = Server(domain_controller, use_ssl=True, tls=tls_configuration, get_info=ALL)
+
+    # Adjust the username format for the LDAP connection
+    user_dn = f'{domain}\\{username.split("@")[0]}'
+
+    print(f"Attempting to connect to the server with the user: {user_dn}")
 
     # Create the LDAP Connection
-    conn = Connection(server, user=username, password=password, auto_bind=True)
+    try:
+        conn = Connection(server, user=user_dn, password=password, authentication=NTLM, auto_bind=True)
+        print("Bind successful")
+    except Exception as e:
+        print(f"Failed to bind to server: {e}")
+        return []
 
     computer_names = []
     entries = 0
@@ -75,6 +86,11 @@ def get_computers(domain_controller, domain, username, password):
 def resolve_ips(computer_names, domain_controller):
     resolver = dns.resolver.Resolver()
     resolver.nameservers = [socket.gethostbyname(domain_controller)]
+
+    # Increase the DNS resolver timeout
+    resolver.timeout = 10.0
+    resolver.lifetime = 10.0
+
     ips = []
     for name in alive_it(computer_names):
         if name:  # Ignore if name is empty or None
@@ -92,7 +108,10 @@ def resolve_ips(computer_names, domain_controller):
             except dns.resolver.NoNameservers:
                 print(f"All nameservers failed to answer the query: {name}")
                 pass
-            time.sleep(0.5)  # Add a half second delay between each request
+            except dns.exception.Timeout:
+                print(f"Query timed out for {name}")
+                pass
+            time.sleep(1)  # Add a one second delay between each request
         else:
             #print("Encountered an empty DNS name, skipping...")
             pass
