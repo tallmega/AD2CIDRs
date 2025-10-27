@@ -36,13 +36,13 @@ def get_computers(domain_controller, domain, username, password):
     tls_configuration = Tls(validate=ssl.CERT_NONE)  # For testing purposes only
     # Note: For production, use validate=ssl.CERT_REQUIRED and specify a valid CA certificate
 
-    # Initialize the Server with SSL and proper settings
+    # Initialize the Server
     server = Server(
         domain_controller,
+        port=636,  # LDAPS port
         use_ssl=True,
         tls=tls_configuration,
-        get_info=ALL,
-        mode='IP-V4_PREFERRED'
+        get_info=ALL
     )
 
     # Adjust the username format for the LDAP connection
@@ -50,7 +50,7 @@ def get_computers(domain_controller, domain, username, password):
 
     print(f"Attempting to connect to the server with the user: {user_dn}")
 
-    # Create the LDAP Connection with signing and sealing enabled
+    # Create the LDAP Connection
     try:
         conn = Connection(
             server,
