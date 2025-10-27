@@ -36,18 +36,32 @@ def get_computers(domain_controller, domain, username, password):
     tls_configuration = Tls(validate=ssl.CERT_NONE)  # For testing purposes only
     # Note: For production, use validate=ssl.CERT_REQUIRED and specify a valid CA certificate
 
-    # Initialize the Server
-    server = Server(domain_controller, get_info=ALL)
-    #server = Server(domain_controller, use_ssl=True, tls=tls_configuration, get_info=ALL)
+    # Initialize the Server with SSL and proper settings
+    server = Server(
+        domain_controller,
+        use_ssl=True,
+        tls=tls_configuration,
+        get_info=ALL,
+        mode='IP-V4_PREFERRED'
+    )
 
     # Adjust the username format for the LDAP connection
     user_dn = f'{domain}\\{username.split("@")[0]}'
 
     print(f"Attempting to connect to the server with the user: {user_dn}")
 
-    # Create the LDAP Connection
+    # Create the LDAP Connection with signing and sealing enabled
     try:
-        conn = Connection(server, user=user_dn, password=password, authentication=NTLM, auto_bind=True)
+        conn = Connection(
+            server,
+            user=user_dn,
+            password=password,
+            authentication=NTLM,
+            auto_bind=True,
+            receive_timeout=60,
+            sasl_credentials=None,
+            session_security=True  # Enable LDAP signing
+        )
         print("Bind successful")
     except Exception as e:
         print(f"Failed to bind to server: {e}")
