@@ -59,8 +59,8 @@ def get_computers(domain_controller, domain, username, password):
             authentication=NTLM,
             auto_bind=True,
             receive_timeout=60,
-            sasl_credentials=None,
-            session_security=True  # Enable LDAP signing
+            sasl_mechanism='GSSAPI',  # Enable LDAP signing through SASL
+            auto_referrals=False      # Avoid referral issues
         )
         print("Bind successful")
     except Exception as e:
