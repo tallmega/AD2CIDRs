@@ -7,11 +7,23 @@ from art import *
 from getpass import getpass
 from ldap3 import Server, Connection, ALL, NTLM, ALL_ATTRIBUTES, SUBTREE, Tls
 from ldap3.extend.standard import PagedSearch
-from ldap3.core.exceptions import LDAPKeyError
+from ldap3.core.exceptions import LDAPKeyError, LDAPSocketOpenError
 from datetime import datetime
 from collections import Counter
 from netaddr import IPNetwork, cidr_merge, IPSet
 from alive_progress import alive_it
+
+def is_valid_hostname(hostname):
+    """Return True for hostnames with labels <=63 characters."""
+    if not hostname:
+        return False
+    hostname = hostname.rstrip('.')  # allow trailing dot
+    if len(hostname) > 253:
+        return False
+    for label in hostname.split('.'):
+        if not label or len(label) > 63:
+            return False
+    return True
 
 def get_credentials():
     parser = argparse.ArgumentParser()
@@ -29,28 +41,70 @@ def get_credentials():
 
     return args.domain_controller, args.domain, args.username, args.password
 
+def _bind_connection(domain_controller, user_dn, password):
+    tls_configuration = Tls(validate=ssl.CERT_NONE)  # For testing; tighten validation in production
+    for protocol, use_ssl in (("LDAPS", True), ("LDAP", False)):
+        try:
+            server = Server(
+                domain_controller,
+                use_ssl=use_ssl,
+                tls=tls_configuration if use_ssl else None,
+                get_info=ALL,
+            )
+            conn = Connection(
+                server,
+                user=user_dn,
+                password=password,
+                authentication=NTLM,
+                auto_bind=True,
+                auto_referrals=False,
+                receive_timeout=15,
+            )
+            print(f"Bind successful over {protocol}")
+            return conn
+        except Exception as exc:
+            print(f"{protocol} bind failed: {exc}")
+    print("Failed to bind over LDAPS and LDAP")
+    return None
+
+def _derive_base_dn(domain, conn):
+    if conn and conn.server:
+        server_info = getattr(conn.server, "info", None)
+        if server_info:
+            info_other = getattr(server_info, "other", {}) or {}
+            default_context = info_other.get('defaultNamingContext')
+            if default_context:
+                derived_dn = default_context[0]
+                if derived_dn:
+                    print(f"Using default naming context from server: {derived_dn}")
+                    return derived_dn
+        naming_contexts = getattr(server_info, "naming_contexts", None)
+        if naming_contexts:
+            derived_dn = naming_contexts[0]
+            if derived_dn:
+                print(f"Using first naming context from server: {derived_dn}")
+                return derived_dn
+
+    if '.' in domain:
+        base_dn = ','.join('dc=' + part for part in domain.split('.'))
+        print(f"Falling back to domain-derived base DN: {base_dn}")
+        return base_dn
+
+    print("Unable to derive base DN automatically. Please provide the fully qualified domain name.")
+    return None
+
+
 def get_computers(domain_controller, domain, username, password):
-    base_dn = ','.join('dc=' + part for part in domain.split('.'))
-
-    # Configure TLS for LDAPS (LDAP over SSL)
-    tls_configuration = Tls(validate=ssl.CERT_NONE)  # For testing purposes only
-    # Note: For production, use validate=ssl.CERT_REQUIRED and specify a valid CA certificate
-
-    # Initialize the Server
-    server = Server(domain_controller, get_info=ALL)
-    #server = Server(domain_controller, use_ssl=True, tls=tls_configuration, get_info=ALL)
-
-    # Adjust the username format for the LDAP connection
     user_dn = f'{domain}\\{username.split("@")[0]}'
 
     print(f"Attempting to connect to the server with the user: {user_dn}")
 
-    # Create the LDAP Connection
-    try:
-        conn = Connection(server, user=user_dn, password=password, authentication=NTLM, auto_bind=True)
-        print("Bind successful")
-    except Exception as e:
-        print(f"Failed to bind to server: {e}")
+    conn = _bind_connection(domain_controller, user_dn, password)
+    if not conn:
+        return []
+
+    base_dn = _derive_base_dn(domain, conn)
+    if not base_dn:
         return []
 
     computer_names = []
@@ -58,17 +112,25 @@ def get_computers(domain_controller, domain, username, password):
     cookie = None
 
     while True:
-        conn.search(search_base=base_dn,
-                    search_filter='(objectclass=computer)',
-                    search_scope=SUBTREE,
-                    attributes=['dNSHostName'],
-                    paged_size=1000,
-                    paged_cookie=cookie)
+        try:
+            conn.search(search_base=base_dn,
+                        search_filter='(objectclass=computer)',
+                        search_scope=SUBTREE,
+                        attributes=['dNSHostName'],
+                        paged_size=1000,
+                        paged_cookie=cookie)
+        except LDAPSocketOpenError as err:
+            print(f"Ignoring referral with invalid server address: {err}")
+            break
 
         for entry in conn.entries:
             entries += 1
             try:
-                computer_names.append(entry['dNSHostName'])
+                dns_value = entry['dNSHostName'].value
+                if dns_value:
+                    computer_names.append(dns_value)
+                else:
+                    print(f"'dNSHostName' attribute empty for entry {entry.entry_dn}")
             except LDAPKeyError:
                 print(f"No 'dNSHostName' attribute for entry {entry.entry_dn}")
 
@@ -79,8 +141,6 @@ def get_computers(domain_controller, domain, username, password):
             break
 
     print(f"Total entries returned: {entries}")
-    return computer_names
-
     return computer_names
 
 def resolve_ips(computer_names, domain_controller):
@@ -95,6 +155,9 @@ def resolve_ips(computer_names, domain_controller):
     for name in alive_it(computer_names):
         if name:  # Ignore if name is empty or None
             try:
+                if not is_valid_hostname(name):
+                    print(f"Skipping invalid hostname (label too long): {name}")
+                    continue
                 #print(f"Resolving {name}")
                 answers = resolver.resolve(str(name), 'A')
                 for rdata in answers:
