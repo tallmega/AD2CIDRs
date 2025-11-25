@@ -67,8 +67,10 @@ def resolve_ips(computer_names, nameserver_ip):
                 answers = resolver.resolve(name, 'A')
                 for rdata in answers:
                     ips.append(str(rdata.address))
-            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
-                    dns.resolver.NoNameservers, dns.exception.Timeout):
+            except dns.exception.Timeout:
+                # Surface timeouts immediately so the user can react mid-run
+                print(f"DNS query timed out for {name} using {nameserver_ip}")
+            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
                 pass
             time.sleep(0.1)  # prevent flooding
     return ips
