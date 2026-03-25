@@ -2,8 +2,33 @@ import argparse
 import json
 import dns.resolver
 import time
-from alive_progress import alive_it
+import sys
 from collections import Counter
+from alive_progress import alive_it
+
+
+_UNICODE_PROGRESS_SAMPLE = "▏▎▍▌▋▊▉█⠋"
+
+
+def iter_with_progress(items, total=None, **options):
+    stream = getattr(sys, "stdout", None)
+    encoding = getattr(stream, "encoding", None) if stream else None
+
+    if encoding:
+        try:
+            _UNICODE_PROGRESS_SAMPLE.encode(encoding)
+            return alive_it(items, total=total, **options)
+        except (LookupError, UnicodeEncodeError):
+            pass
+
+    title = options.get("title")
+    if title:
+        if total is None and hasattr(items, "__len__"):
+            total = len(items)
+        count_suffix = f" ({total} items)" if total is not None else ""
+        print(f"{title}{count_suffix} without live progress; stdout encoding is {encoding or 'unknown'}.")
+
+    return items
 
 
 def parse_bloodhound_computers(file_path):
@@ -61,7 +86,7 @@ def resolve_ips(computer_names, nameserver_ip):
     print(f"Using DNS nameserver: {resolver.nameservers[0]}")
 
     ips = []
-    for name in alive_it(computer_names, title="Resolving"):
+    for name in iter_with_progress(computer_names, title="Resolving"):
         if name:
             try:
                 answers = resolver.resolve(name, 'A')

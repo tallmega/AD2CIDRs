@@ -3,6 +3,7 @@ import dns.resolver
 import socket
 import time
 import ssl
+import sys
 from art import *
 from getpass import getpass
 from ldap3 import Server, Connection, ALL, NTLM, ALL_ATTRIBUTES, SUBTREE, Tls
@@ -12,6 +13,30 @@ from datetime import datetime
 from collections import Counter
 from netaddr import IPNetwork, cidr_merge, IPSet
 from alive_progress import alive_it
+
+
+_UNICODE_PROGRESS_SAMPLE = "▏▎▍▌▋▊▉█⠋"
+
+
+def iter_with_progress(items, total=None, **options):
+    stream = getattr(sys, "stdout", None)
+    encoding = getattr(stream, "encoding", None) if stream else None
+
+    if encoding:
+        try:
+            _UNICODE_PROGRESS_SAMPLE.encode(encoding)
+            return alive_it(items, total=total, **options)
+        except (LookupError, UnicodeEncodeError):
+            pass
+
+    title = options.get("title")
+    if title:
+        if total is None and hasattr(items, "__len__"):
+            total = len(items)
+        count_suffix = f" ({total} items)" if total is not None else ""
+        print(f"{title}{count_suffix} without live progress; stdout encoding is {encoding or 'unknown'}.")
+
+    return items
 
 def is_valid_hostname(hostname):
     """Return True for hostnames with labels <=63 characters."""
@@ -152,7 +177,7 @@ def resolve_ips(computer_names, domain_controller):
     resolver.lifetime = 10.0
 
     ips = []
-    for name in alive_it(computer_names):
+    for name in iter_with_progress(computer_names, title="Resolving"):
         if name:  # Ignore if name is empty or None
             try:
                 if not is_valid_hostname(name):
