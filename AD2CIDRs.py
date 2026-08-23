@@ -6,7 +6,7 @@ import ssl
 import sys
 from art import *
 from getpass import getpass
-from ldap3 import Server, Connection, ALL, NTLM, ALL_ATTRIBUTES, SUBTREE, Tls
+from ldap3 import Server, Connection, NONE, NTLM, SUBTREE, Tls
 from ldap3.extend.standard import PagedSearch
 from ldap3.core.exceptions import LDAPKeyError, LDAPSocketOpenError
 from datetime import datetime
@@ -66,30 +66,72 @@ def get_credentials():
 
     return args.domain_controller, args.domain, args.username, args.password
 
+def _ldap_error(conn):
+    """Return the useful part of ldap3's otherwise terse failure state."""
+    result = getattr(conn, "result", None)
+    if isinstance(result, dict):
+        parts = []
+        for key in ("description", "message"):
+            value = result.get(key)
+            if value:
+                parts.append(str(value))
+        if parts:
+            return ": ".join(parts)
+    return getattr(conn, "last_error", None) or "server returned no LDAP error"
+
+
 def _bind_connection(domain_controller, user_dn, password):
     tls_configuration = Tls(validate=ssl.CERT_NONE)  # For testing; tighten validation in production
-    for protocol, use_ssl in (("LDAPS", True), ("LDAP", False)):
+    attempts = (
+        ("STARTTLS", False, 389),
+        ("LDAPS", True, 636),
+    )
+
+    for protocol, use_ssl, port in attempts:
+        conn = None
         try:
             server = Server(
                 domain_controller,
+                port=port,
                 use_ssl=use_ssl,
-                tls=tls_configuration if use_ssl else None,
-                get_info=ALL,
+                tls=tls_configuration,
+                get_info=NONE,
+                connect_timeout=10,
             )
             conn = Connection(
                 server,
                 user=user_dn,
                 password=password,
                 authentication=NTLM,
-                auto_bind=True,
                 auto_referrals=False,
                 receive_timeout=15,
+                raise_exceptions=False,
             )
+
+            # RootDSE discovery can hang on filtered LDAP connections.  Neither
+            # binding nor this script's domain-derived search base requires it.
+            conn.open(read_server_info=False)
+            if conn.closed:
+                print(f"{protocol} socket open failed: {_ldap_error(conn)}")
+                continue
+
+            if protocol == "STARTTLS" and not conn.start_tls(read_server_info=False):
+                print(f"STARTTLS negotiation failed: {_ldap_error(conn)}")
+                conn.unbind()
+                continue
+
+            if not conn.bind(read_server_info=False):
+                print(f"{protocol} NTLM bind failed: {_ldap_error(conn)}")
+                conn.unbind()
+                continue
+
             print(f"Bind successful over {protocol}")
             return conn
         except Exception as exc:
             print(f"{protocol} bind failed: {exc}")
-    print("Failed to bind over LDAPS and LDAP")
+            if conn:
+                conn.unbind()
+    print("Failed to bind over STARTTLS and LDAPS")
     return None
 
 def _derive_base_dn(domain, conn):
@@ -120,7 +162,13 @@ def _derive_base_dn(domain, conn):
 
 
 def get_computers(domain_controller, domain, username, password):
-    user_dn = f'{domain}\\{username.split("@")[0]}'
+    if "\\" in username:
+        user_dn = username
+    else:
+        # NTLM requires DOMAIN\\user.  In the usual AD configuration the
+        # NetBIOS domain is the first label of the DNS domain.
+        netbios_domain = domain.split(".", 1)[0].upper()
+        user_dn = f'{netbios_domain}\\{username.split("@", 1)[0]}'
 
     print(f"Attempting to connect to the server with the user: {user_dn}")
 
